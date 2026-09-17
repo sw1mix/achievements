@@ -28,14 +28,17 @@ html[data-theme="dark"] {
 
 body {
   margin: 0;
-  padding: 0 20px 56px;
+  padding: 0 max(20px, env(safe-area-inset-left)) calc(56px + env(safe-area-inset-bottom));
   background: var(--bg);
   color: var(--text);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
+
+button, .check, .cell { touch-action: manipulation; }
 
 h1, h2 { font-weight: 600; letter-spacing: -.015em; margin: 0; }
 
@@ -222,6 +225,16 @@ html[data-theme="dark"] .segmented__btn.is-active { box-shadow: none; background
 
 .cell--weekend { color: var(--muted); }
 .cell--today { background: var(--today); }
+
+/* Названия остаются на месте, когда сетку прокручивают по горизонтали. */
+.cell--name,
+.grid__row:first-child .cell--head:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--panel);
+  box-shadow: 1px 0 0 var(--line-soft);
+}
 
 .cell--name {
   justify-content: flex-start;
@@ -698,13 +711,20 @@ html[data-theme="dark"] .popover { box-shadow: 0 8px 28px rgba(0, 0, 0, .5); }
 }
 
 @media (max-width: 640px) {
-  body { padding: 0 12px 32px; }
+  body { padding: 0 max(12px, env(safe-area-inset-left)) calc(32px + env(safe-area-inset-bottom)); }
   .panel { padding: 14px 12px; }
   .periodbar { flex-wrap: wrap; }
-  .periodbar > .btn--ghost { display: none; }
-  .grid { grid-template-columns: 124px repeat(var(--days, 7), minmax(var(--col, 36px), 1fr)) 46px; }
-  .grid--month { grid-template-columns: 124px repeat(var(--days), 26px) 46px; }
+  .periodbar__label { min-width: 130px; }
+  .grid { grid-template-columns: 124px repeat(var(--days, 7), minmax(var(--col, 42px), 1fr)) 46px; }
+  .grid--month { grid-template-columns: 124px repeat(var(--days), 30px) 46px; }
   /* На узком экране перетаскивание недоступно — освобождаем место под название. */
   .habit-drag { display: none; }
+  /* Крупнее цель для пальца: сама ячейка тоже переключает отметку. */
+  .cell { padding: 12px 3px; }
+  .check { width: 24px; height: 24px; }
+  .check:checked::after { left: 7px; top: 3.5px; }
+  .grid--month .check { width: 20px; height: 20px; }
+  .grid--month .check:checked::after { left: 5.5px; top: 2.5px; }
+  .topbar { padding: 18px 0 14px; }
   .rhythm { gap: 16px; }
 }

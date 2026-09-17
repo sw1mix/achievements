@@ -190,7 +190,8 @@
     cells.push(goalCell);
 
     days.forEach((day) => {
-      const cell = node('div', 'cell'
+      // Ячейка-подпись: нажатие в любой её точке переключает отметку — важно для касаний.
+      const cell = node('label', 'cell'
         + (isWeekend(day) ? ' cell--weekend' : '')
         + (iso(day) === today ? ' cell--today' : ''));
       cells.push(cell);
@@ -994,6 +995,39 @@
     if (e.key !== STORAGE_KEY) return;
     state = loadState();
     render();
+  });
+
+  /* --- Установка на устройство и работа офлайн --- */
+
+  // Service worker недоступен при открытии файла напрямую — это нормально.
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch((e) => {
+        console.warn('Офлайн-режим недоступен:', e);
+      });
+    });
+  }
+
+  const installBtn = document.getElementById('install-btn');
+  let installPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installPrompt = e;
+    installBtn.hidden = false;
+  });
+
+  installBtn.addEventListener('click', async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    installBtn.hidden = true;
+  });
+
+  window.addEventListener('appinstalled', () => {
+    installPrompt = null;
+    installBtn.hidden = true;
   });
 
   render();
