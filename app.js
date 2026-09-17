@@ -7,12 +7,14 @@
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
   const {
-    PALETTE, ICONS, DAY_NAMES, DAY_LETTERS, MONTHS_GEN, MONTHS_SHORT, RHYTHM_WEEKS,
-    iso, addDays, weekday, isWeekend, startOfWeek, sameDay,
+    PALETTE, EMOJI, DAY_NAMES, DAY_LETTERS, MONTHS_GEN, RHYTHM_WEEKS, MAX_GOAL, DEFAULT_GOAL,
+    iso, addDays, weekday, isWeekend, sameDay,
     periodDays, shiftPeriod, normalizeAnchor, formatPeriod,
-    sanitizeName, createHabit, initialState, migrate,
-    isDone, setDone, removeHabit,
-    dayCount, periodStats, streak, percent, plural,
+    sanitizeName, autoBadge, emojiBadge, textBadge, clampGoal,
+    createHabit, initialState, migrate,
+    activeHabits, archivedHabits, isDone, setDone,
+    archiveHabit, restoreHabit, removeHabit, reorderHabits, moveHabit,
+    goalForDays, periodStats, streak, percent, plural,
     weekdayTotals, weeklyTotals, yearGrid,
   } = core;
 
@@ -24,6 +26,7 @@
     periodSub: document.getElementById('period-sub'),
     addForm: document.getElementById('add-form'),
     addInput: document.getElementById('add-input'),
+    addBadge: document.getElementById('add-badge'),
     importFile: document.getElementById('import-file'),
     modeButtons: Array.from(document.querySelectorAll('.segmented__btn')),
     rose: document.getElementById('weekday-rose'),
@@ -32,12 +35,18 @@
     yearLabel: document.getElementById('year-label'),
     popover: document.getElementById('popover'),
     themeBtn: document.getElementById('theme-btn'),
+    archivePanel: document.getElementById('archive-panel'),
+    archiveList: document.getElementById('archive-list'),
+    archiveCount: document.getElementById('archive-count'),
   };
 
   let state = loadState();
   let prefs = loadPrefs();
   let anchor = normalizeAnchor(prefs.mode, new Date());
   let year = prefs.year;
+
+  // Значок и настройки будущего достижения: badge === null означает автоподбор по названию.
+  let draft = { badge: null, color: null, goal: DEFAULT_GOAL };
 
   /* --- Хранилище --- */
 
@@ -91,6 +100,13 @@
     return element;
   }
 
+  function button(className, text, onClick) {
+    const element = node('button', className, text);
+    element.type = 'button';
+    if (onClick) element.addEventListener('click', onClick);
+    return element;
+  }
+
   /* --- Рендер --- */
 
   function render() {
@@ -100,6 +116,8 @@
     renderStats();
     renderRhythm();
     renderYear();
+    renderArchive();
+    renderDraftBadge();
   }
 
   // Панели статистики зависят только от отметок — при клике по чекбоксу сетку не пересобираем.
@@ -109,10 +127,10 @@
   }
 
   function renderModeSwitch() {
-    el.modeButtons.forEach((button) => {
-      const active = button.dataset.mode === prefs.mode;
-      button.classList.toggle('is-active', active);
-      button.setAttribute('aria-pressed', String(active));
+    el.modeButtons.forEach((item) => {
+      const active = item.dataset.mode === prefs.mode;
+      item.classList.toggle('is-active', active);
+      item.setAttribute('aria-pressed', String(active));
     });
   }
 
@@ -126,6 +144,7 @@
     const days = periodDays(prefs.mode, anchor);
     const today = iso(new Date());
     const month = prefs.mode === 'month';
+    const habits = activeHabits(state);
 
     el.grid.textContent = '';
     el.grid.classList.toggle('grid--month', month);
@@ -145,52 +164,36 @@
       head.append(cell);
     });
 
-    head.append(node('div', 'cell cell--head', 'Итог'));
+    head.append(node('div', 'cell cell--head', 'Цель'));
     el.grid.append(head);
 
-    if (!state.habits.length) {
-      el.grid.append(node('div', 'empty', 'Пока нет ни одного достижения. Добавьте первое ниже.'));
+    if (!habits.length) {
+      el.grid.append(node('div', 'empty', archivedHabits(state).length
+        ? 'Все достижения в архиве. Верните нужное ниже или добавьте новое.'
+        : 'Пока нет ни одного достижения. Добавьте первое ниже.'));
       return;
     }
 
-    state.habits.forEach((habit) => {
-      el.grid.append(habitRow(habit, days, today));
-    });
+    habits.forEach((habit) => el.grid.append(habitRow(habit, days, today)));
   }
 
   function habitRow(habit, days, today) {
     const row = node('div', 'grid__row');
+    const cells = [];
     const nameCell = node('div', 'cell cell--name');
+    cells.push(nameCell);
 
-    const badge = node('button', 'habit-badge');
-    badge.type = 'button';
-    badge.title = 'Цвет, иконка, удаление';
-    badge.setAttribute('aria-label', `Настроить «${habit.name}»`);
-    paintBadge(badge, habit);
-    badge.addEventListener('click', () => openPopover(badge, habit));
-
-    const nameInput = node('input', 'habit-name');
-    nameInput.value = habit.name;
-    nameInput.maxLength = core.MAX_NAME;
-    nameInput.setAttribute('aria-label', 'Название достижения');
-    nameInput.addEventListener('change', () => {
-      habit.name = sanitizeName(nameInput.value, habit.name);
-      nameInput.value = habit.name;
-      badge.setAttribute('aria-label', `Настроить «${habit.name}»`);
-      saveState();
-      renderStats();
-    });
-    nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') nameInput.blur(); });
-
-    nameCell.append(badge, nameInput);
+    nameCell.append(dragHandle(habit, row, cells), habitBadge(habit), habitNameInput(habit));
     row.append(nameCell);
 
-    const totalCell = node('div', 'cell cell--total');
+    const goalCell = node('div', 'cell cell--total');
+    cells.push(goalCell);
 
     days.forEach((day) => {
       const cell = node('div', 'cell'
         + (isWeekend(day) ? ' cell--weekend' : '')
         + (iso(day) === today ? ' cell--today' : ''));
+      cells.push(cell);
 
       const box = node('input', 'check');
       box.type = 'checkbox';
@@ -200,7 +203,7 @@
       box.addEventListener('change', () => {
         setDone(state, habit.id, day, box.checked);
         saveState();
-        updateTotal(habit, totalCell, days);
+        updateGoalCell(habit, goalCell, days);
         renderStats();
         renderRhythm();
         renderYear();
@@ -210,27 +213,123 @@
       row.append(cell);
     });
 
-    updateTotal(habit, totalCell, days);
-    row.append(totalCell);
+    updateGoalCell(habit, goalCell, days);
+    row.append(goalCell);
     return row;
   }
 
-  function paintBadge(badge, habit) {
-    badge.textContent = '';
-    if (habit.icon) {
-      badge.style.background = `${habit.color}1f`;
-      badge.append(node('span', null, habit.icon));
-      return;
-    }
-    badge.style.background = 'transparent';
-    const dot = node('span', 'habit-badge__dot');
-    dot.style.background = habit.color;
-    badge.append(dot);
+  function habitNameInput(habit) {
+    const input = node('input', 'habit-name');
+    input.value = habit.name;
+    input.maxLength = core.MAX_NAME;
+    input.setAttribute('aria-label', 'Название достижения');
+    input.addEventListener('change', () => {
+      habit.name = sanitizeName(input.value, habit.name);
+      input.value = habit.name;
+      saveState();
+      render();
+    });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
+    return input;
   }
 
-  function updateTotal(habit, cell, days) {
+  function habitBadge(habit) {
+    const badge = button('habit-badge', null, () => openEditor(badge, habit));
+    badge.title = 'Значок, цвет и цель';
+    badge.setAttribute('aria-label', `Настроить «${habit.name}»`);
+    paintBadge(badge, habit.badge, habit.color);
+    return badge;
+  }
+
+  function paintBadge(element, badge, color) {
+    element.textContent = '';
+    element.style.background = `color-mix(in srgb, ${color} 14%, transparent)`;
+    element.style.color = color;
+    const value = node('span', badge.type === 'text' ? 'habit-badge__text' : null, badge.value);
+    element.append(value);
+  }
+
+  function updateGoalCell(habit, cell, days) {
     const done = days.filter((day) => isDone(state, habit.id, day)).length;
-    cell.textContent = `${done}/${days.length}`;
+    const goal = goalForDays(habit.goal, days.length);
+    cell.textContent = `${done}/${goal}`;
+    cell.classList.toggle('is-hit', done >= goal);
+    cell.title = `${done} ${plural(done, 'отметка', 'отметки', 'отметок')}`
+      + ` при цели ${goal} ${plural(goal, 'раз', 'раза', 'раз')}`
+      + (prefs.mode === 'month' ? ' в месяц' : ' в неделю');
+  }
+
+  /* --- Перетаскивание --- */
+
+  let dragId = null;
+
+  function dragHandle(habit, row, cells) {
+    const handle = node('span', 'habit-drag');
+    handle.textContent = '⠿';
+    handle.draggable = true;
+    handle.tabIndex = 0;
+    handle.setAttribute('role', 'button');
+    handle.setAttribute('aria-label', `Переместить «${habit.name}»: стрелки вверх и вниз`);
+
+    handle.addEventListener('dragstart', (e) => {
+      dragId = habit.id;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', habit.id);
+      cells.forEach((cell) => cell.classList.add('is-dragging'));
+    });
+
+    handle.addEventListener('dragend', () => {
+      dragId = null;
+      clearDropHints();
+    });
+
+    handle.addEventListener('keydown', (e) => {
+      const direction = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+      if (!direction) return;
+      e.preventDefault();
+      moveHabit(state, habit.id, direction);
+      saveState();
+      render();
+      focusHandle(habit.id);
+    });
+
+    // Строка целиком становится зоной приёма, чтобы бросать было легко.
+    cells.forEach((cell) => {
+      cell.addEventListener('dragover', (e) => {
+        if (!dragId || dragId === habit.id) return;
+        e.preventDefault();
+        const rect = cells[0].getBoundingClientRect();
+        const after = e.clientY > rect.top + rect.height / 2;
+        clearDropHints();
+        cells.forEach((item) => item.classList.add(after ? 'is-drop-after' : 'is-drop-before'));
+      });
+
+      cell.addEventListener('drop', (e) => {
+        if (!dragId || dragId === habit.id) return;
+        e.preventDefault();
+        const after = cells[0].classList.contains('is-drop-after');
+        const moved = dragId;
+        reorderHabits(state, moved, habit.id, after);
+        saveState();
+        dragId = null;
+        render();
+        focusHandle(moved);
+      });
+    });
+
+    return handle;
+  }
+
+  function clearDropHints() {
+    el.grid.querySelectorAll('.is-drop-before, .is-drop-after, .is-dragging')
+      .forEach((cell) => cell.classList.remove('is-drop-before', 'is-drop-after', 'is-dragging'));
+  }
+
+  function focusHandle(habitId) {
+    const index = activeHabits(state).findIndex((habit) => habit.id === habitId);
+    if (index < 0) return;
+    const handles = el.grid.querySelectorAll('.habit-drag');
+    if (handles[index]) handles[index].focus();
   }
 
   /* --- Диаграммы периода --- */
@@ -238,42 +337,47 @@
   function renderCharts() {
     const days = periodDays(prefs.mode, anchor);
     el.charts.textContent = '';
-    if (!state.habits.length) return;
+    if (!activeHabits(state).length) return;
 
-    const { perHabit, total, possible } = periodStats(state, days);
+    const { perHabit, total, possible, marks } = periodStats(state, days);
 
     el.charts.append(donutCard({
       value: total,
       max: possible,
       color: 'var(--accent)',
-      label: prefs.mode === 'month' ? 'Всего за месяц' : 'Всего за неделю',
-      sub: `${total} из ${possible} отметок`,
+      label: prefs.mode === 'month' ? 'Цели месяца' : 'Цели недели',
+      sub: `${total} из ${possible} к цели`
+        + (marks > total ? ` · ${marks - total} сверх` : ''),
       size: 148,
       large: true,
     }));
 
-    perHabit.forEach(({ habit, done }) => {
+    perHabit.forEach(({ habit, done, goal, hit, extra }) => {
       el.charts.append(donutCard({
-        value: done,
-        max: days.length,
+        value: Math.min(done, goal),
+        max: goal,
         color: habit.color,
         label: habit.name,
-        icon: habit.icon,
-        sub: `${done} из ${days.length} ${plural(days.length, 'дня', 'дней', 'дней')}`,
+        badge: habit.badge,
+        sub: extra > 0 ? `${done} из ${goal} · +${extra}` : `${done} из ${goal}`,
         size: 104,
+        hit,
       }));
     });
   }
 
   function renderSummary() {
     const days = periodDays(prefs.mode, anchor);
-    if (!state.habits.length) {
+    if (!activeHabits(state).length) {
       el.summary.textContent = '';
       return;
     }
 
-    const { total, possible, bestDay } = periodStats(state, days);
-    const parts = [`${percent(total, possible)}% ${prefs.mode === 'month' ? 'месяца' : 'недели'}`];
+    const { total, possible, bestDay, hits, perHabit } = periodStats(state, days);
+    const parts = [
+      `${percent(total, possible)}% ${prefs.mode === 'month' ? 'месяца' : 'недели'}`,
+      `цели: ${hits} из ${perHabit.length}`,
+    ];
 
     if (bestDay) {
       const label = prefs.mode === 'month'
@@ -288,8 +392,8 @@
     el.summary.textContent = parts.join(' · ');
   }
 
-  function donutCard({ value, max, color, label, icon, sub, size, large }) {
-    const card = node('div', 'chart' + (large ? ' chart--main' : ''));
+  function donutCard({ value, max, color, label, badge, sub, size, large, hit }) {
+    const card = node('div', 'chart' + (large ? ' chart--main' : '') + (hit ? ' chart--hit' : ''));
 
     const width = large ? 10 : 8;
     const radius = size / 2 - width;
@@ -324,12 +428,16 @@
       'dominant-baseline': 'central',
       class: 'donut__text' + (large ? ' donut__text--lg' : ''),
     });
-    text.textContent = `${percent(value, max)}%`;
+    text.textContent = hit && !large ? '✓' : `${percent(value, max)}%`;
     svg.append(text);
 
     const title = node('div', 'chart__label');
     title.title = label;
-    if (icon) title.append(node('span', null, icon));
+    if (badge) {
+      const mark = node('span', badge.type === 'text' ? 'chart__badge' : null, badge.value);
+      if (badge.type === 'text') mark.style.color = color;
+      title.append(mark);
+    }
     title.append(node('span', null, label));
 
     card.append(svg, title, node('div', 'chart__sub', sub));
@@ -409,20 +517,30 @@
 
   function renderWeekBars() {
     const weeks = weeklyTotals(state, { weeks: RHYTHM_WEEKS });
-    const max = Math.max(...weeks.map((week) => week.count), 1);
+    const goal = weeks[0] ? weeks[0].goal : 0;
+    const max = Math.max(...weeks.map((week) => week.count), goal, 1);
 
     el.weekBars.textContent = '';
 
     weeks.forEach((week) => {
       const bar = node('div', 'bar' + (week.isCurrent ? ' is-current' : ''));
       bar.title = `${week.start.getDate()} ${MONTHS_GEN[week.start.getMonth()]}`
-        + ` — ${week.count} ${plural(week.count, 'отметка', 'отметки', 'отметок')}`;
+        + ` — ${week.count} ${plural(week.count, 'отметка', 'отметки', 'отметок')}`
+        + (goal ? ` при цели ${goal}` : '');
 
       const fill = node('div', 'bar__fill');
       fill.style.height = `${(week.count / max) * 100}%`;
       fill.style.opacity = week.isCurrent ? '1' : '0.55';
+      bar.append(fill);
 
-      bar.append(fill, node('div', 'bar__tick', week.start.getDate()));
+      // Засечка суммарной недельной цели — видно, добираем мы до плана или нет.
+      if (goal > 0 && goal <= max) {
+        const line = node('div', 'bar__goal');
+        line.style.bottom = `${(goal / max) * 100}%`;
+        bar.append(line);
+      }
+
+      bar.append(node('div', 'bar__tick', week.start.getDate()));
       el.weekBars.append(bar);
     });
   }
@@ -461,108 +579,313 @@
     el.yearLabel.title = `${activeDays} ${plural(activeDays, 'активный день', 'активных дня', 'активных дней')} в ${year}`;
   }
 
-  /* --- Поповер настройки достижения --- */
+  /* --- Архив --- */
 
-  let popoverHabit = null;
+  function renderArchive() {
+    const archived = archivedHabits(state);
+    el.archivePanel.hidden = !archived.length;
+    el.archiveList.textContent = '';
+    if (!archived.length) return;
 
-  function openPopover(anchorEl, habit) {
-    if (popoverHabit === habit.id) {
-      closePopover();
+    el.archiveCount.textContent = `${archived.length} ${plural(archived.length, 'достижение', 'достижения', 'достижений')}`;
+
+    archived.forEach((habit) => {
+      const item = node('div', 'archive__item');
+
+      const mark = node('span', 'archive__badge');
+      paintBadge(mark, habit.badge, habit.color);
+
+      const name = node('div', 'archive__name');
+      name.append(node('div', null, habit.name));
+      name.append(node('div', 'archive__meta muted', `в архиве с ${formatDate(habit.archivedAt)}`));
+
+      const restore = button('btn btn--ghost', 'Вернуть', () => {
+        restoreHabit(state, habit.id);
+        saveState();
+        render();
+      });
+
+      const drop = button('archive__delete', 'Удалить', () => {
+        if (!confirm(`Удалить «${habit.name}» вместе со всеми отметками? Это необратимо.`)) return;
+        removeHabit(state, habit.id);
+        saveState();
+        render();
+      });
+      drop.title = 'Удалить безвозвратно';
+
+      item.append(mark, name, restore, drop);
+      el.archiveList.append(item);
+    });
+  }
+
+  function formatDate(value) {
+    const date = core.fromISO(value);
+    return `${date.getDate()} ${MONTHS_GEN[date.getMonth()]} ${date.getFullYear()}`;
+  }
+
+  /* --- Редактор значка, цвета и цели --- */
+
+  // habit === null означает настройку будущего достижения (черновик формы).
+  let editor = null;
+
+  function openEditor(anchorEl, habit) {
+    const key = habit ? habit.id : 'draft';
+    if (editor && editor.key === key) {
+      closeEditor();
       return;
     }
-    popoverHabit = habit.id;
-    el.popover.textContent = '';
+    editor = { key, habit, anchorEl, tab: currentBadge(habit).type };
+    renderEditor();
+  }
 
-    const colors = node('div', 'popover__group');
-    colors.append(node('div', 'popover__title', 'Цвет'));
-    const swatches = node('div', 'swatches');
-    PALETTE.forEach((color) => {
-      const swatch = node('button', 'swatch' + (habit.color === color ? ' is-active' : ''));
-      swatch.type = 'button';
-      swatch.style.background = color;
-      swatch.setAttribute('aria-label', `Цвет ${color}`);
-      swatch.addEventListener('click', () => {
-        habit.color = color;
+  function currentBadge(habit) {
+    if (habit) return habit.badge;
+    return draft.badge || autoBadge(sanitizeName(el.addInput.value));
+  }
+
+  function currentColor(habit) {
+    if (habit) return habit.color;
+    return draft.color || PALETTE[state.habits.length % PALETTE.length];
+  }
+
+  function currentGoal(habit) {
+    return habit ? habit.goal : draft.goal;
+  }
+
+  /* Сетка пересоздаётся целиком, поэтому поповер надо переякорить на новый
+     элемент значка — иначе он останется привязан к удалённому узлу. */
+  function refreshHabitViews(habit) {
+    saveState();
+    renderGrid();
+    renderStats();
+    const index = activeHabits(state).findIndex((item) => item.id === habit.id);
+    const badges = el.grid.querySelectorAll('.habit-badge');
+    if (index >= 0 && badges[index]) editor.anchorEl = badges[index];
+  }
+
+  function applyBadge(badge) {
+    if (editor.habit) {
+      editor.habit.badge = badge;
+      refreshHabitViews(editor.habit);
+    } else {
+      draft.badge = badge;
+      renderDraftBadge();
+    }
+    renderEditor();
+  }
+
+  function applyColor(color) {
+    if (editor.habit) {
+      editor.habit.color = color;
+      refreshHabitViews(editor.habit);
+    } else {
+      draft.color = color;
+      renderDraftBadge();
+    }
+    renderEditor();
+  }
+
+  function applyGoal(goal) {
+    if (editor.habit) {
+      editor.habit.goal = clampGoal(goal);
+      refreshHabitViews(editor.habit);
+      renderRhythm();
+    } else {
+      draft.goal = clampGoal(goal);
+    }
+    renderEditor();
+  }
+
+  function renderEditor() {
+    const { habit } = editor;
+    const badge = currentBadge(habit);
+    const color = currentColor(habit);
+    const goal = currentGoal(habit);
+    const name = habit ? habit.name : sanitizeName(el.addInput.value);
+
+    el.popover.textContent = '';
+    el.popover.append(badgeGroup(badge, color, name));
+    el.popover.append(colorGroup(color));
+    el.popover.append(goalGroup(goal));
+
+    if (habit) {
+      el.popover.append(button('popover__action', 'В архив', () => {
+        closeEditor();
+        archiveHabit(state, habit.id);
         saveState();
-        closePopover();
         render();
+      }));
+    }
+
+    el.popover.hidden = false;
+    placePopover(editor.anchorEl);
+  }
+
+  function badgeGroup(badge, color, name) {
+    const group = node('div', 'popover__group');
+    const head = node('div', 'popover__head');
+    head.append(node('div', 'popover__title', 'Значок'));
+
+    const tabs = node('div', 'segmented segmented--sm');
+    [['emoji', 'Смайлик'], ['text', 'Текст']].forEach(([type, label]) => {
+      const tab = button('segmented__btn' + (editor.tab === type ? ' is-active' : ''), label, () => {
+        editor.tab = type;
+        // Переключение вкладки сразу переводит значок в выбранный вид.
+        if (type === 'text' && badge.type !== 'text') applyBadge(textBadge('', name));
+        else if (type === 'emoji' && badge.type !== 'emoji') applyBadge(autoBadge(name));
+        else renderEditor();
       });
+      tab.setAttribute('aria-pressed', String(editor.tab === type));
+      tabs.append(tab);
+    });
+
+    head.append(tabs);
+    group.append(head);
+
+    if (editor.tab === 'text') {
+      const field = node('input', 'popover__input');
+      field.type = 'text';
+      field.maxLength = core.MAX_BADGE_TEXT;
+      field.value = badge.type === 'text' ? badge.value : '';
+      field.placeholder = 'Тр';
+      field.setAttribute('aria-label', 'Текст значка');
+      field.addEventListener('input', () => {
+        const next = textBadge(field.value, name);
+        if (editor.habit) {
+          editor.habit.badge = next;
+          refreshHabitViews(editor.habit);
+        } else {
+          draft.badge = next;
+          renderDraftBadge();
+        }
+      });
+      group.append(field);
+      group.append(node('div', 'popover__hint muted', 'До 3 символов — например, «Тр» или «5к»'));
+    } else {
+      const icons = node('div', 'icons');
+      EMOJI.forEach((emoji) => {
+        const item = button('icon-btn' + (badge.type === 'emoji' && badge.value === emoji ? ' is-active' : ''),
+          emoji, () => applyBadge(emojiBadge(emoji)));
+        item.setAttribute('aria-label', `Значок ${emoji}`);
+        icons.append(item);
+      });
+      group.append(icons);
+      group.append(button('popover__link', 'Подобрать по названию', () => applyBadge(autoBadge(name))));
+    }
+
+    return group;
+  }
+
+  function colorGroup(color) {
+    const group = node('div', 'popover__group');
+    group.append(node('div', 'popover__title', 'Цвет'));
+
+    const swatches = node('div', 'swatches');
+    PALETTE.forEach((option) => {
+      const swatch = button('swatch' + (color === option ? ' is-active' : ''), null, () => applyColor(option));
+      swatch.style.background = option;
+      swatch.setAttribute('aria-label', `Цвет ${option}`);
       swatches.append(swatch);
     });
-    colors.append(swatches);
 
-    const iconGroup = node('div', 'popover__group');
-    iconGroup.append(node('div', 'popover__title', 'Иконка'));
-    const icons = node('div', 'icons');
-    ICONS.forEach((icon) => {
-      const button = node('button', 'icon-btn' + (habit.icon === icon ? ' is-active' : ''), icon || '•');
-      button.type = 'button';
-      button.setAttribute('aria-label', icon ? `Иконка ${icon}` : 'Без иконки');
-      button.addEventListener('click', () => {
-        habit.icon = icon;
-        saveState();
-        closePopover();
-        render();
-      });
-      icons.append(button);
-    });
-    iconGroup.append(icons);
+    group.append(swatches);
+    return group;
+  }
 
-    const remove = node('button', 'popover__delete', 'Удалить достижение');
-    remove.type = 'button';
-    remove.addEventListener('click', () => {
-      closePopover();
-      if (!confirm(`Удалить «${habit.name}» вместе с отметками?`)) return;
-      removeHabit(state, habit.id);
-      saveState();
-      render();
-    });
+  function goalGroup(goal) {
+    const group = node('div', 'popover__group');
+    group.append(node('div', 'popover__title', 'Цель — раз в неделю'));
 
-    el.popover.append(colors, iconGroup, remove);
-    el.popover.hidden = false;
-    placePopover(anchorEl);
+    const scale = node('div', 'goals');
+    for (let value = 1; value <= MAX_GOAL; value++) {
+      const item = button('goal-btn' + (goal === value ? ' is-active' : ''), String(value), () => applyGoal(value));
+      item.setAttribute('aria-label', `${value} ${plural(value, 'раз', 'раза', 'раз')} в неделю`);
+      item.setAttribute('aria-pressed', String(goal === value));
+      scale.append(item);
+    }
+
+    group.append(scale);
+    group.append(node('div', 'popover__hint muted', goal === MAX_GOAL
+      ? 'Каждый день'
+      : `${goal} ${plural(goal, 'раз', 'раза', 'раз')} в неделю · в месяце ≈ ${goalForDays(goal, 30)}`));
+    return group;
   }
 
   function placePopover(anchorEl) {
     const rect = anchorEl.getBoundingClientRect();
     const width = el.popover.offsetWidth;
+    const height = el.popover.offsetHeight;
+    const viewport = document.documentElement.clientHeight;
+
     const left = Math.min(
       Math.max(8, rect.left + window.scrollX),
       window.scrollX + document.documentElement.clientWidth - width - 8,
     );
+
+    // Если снизу не хватает места — раскрываем поповер вверх от значка.
+    const below = rect.bottom + 6 + height <= viewport;
+    const top = below
+      ? rect.bottom + window.scrollY + 6
+      : Math.max(window.scrollY + 8, rect.top + window.scrollY - height - 6);
+
     el.popover.style.left = `${left}px`;
-    el.popover.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    el.popover.style.top = `${top}px`;
   }
 
-  function closePopover() {
-    popoverHabit = null;
+  function closeEditor() {
+    editor = null;
     el.popover.hidden = true;
     el.popover.textContent = '';
   }
 
+  /* Перехват на фазе capture обязателен: клик внутри поповера пересоздаёт его
+     содержимое, и на фазе всплытия исходная цель уже вне документа. */
   document.addEventListener('click', (e) => {
-    if (!popoverHabit) return;
+    if (!editor) return;
     const target = e.target instanceof Element ? e.target : null;
     if (target && (el.popover.contains(target) || target.closest('.habit-badge'))) return;
-    closePopover();
+    closeEditor();
+  }, true);
+
+  window.addEventListener('resize', closeEditor);
+
+  /* --- Форма добавления --- */
+
+  function renderDraftBadge() {
+    const badge = draft.badge || autoBadge(sanitizeName(el.addInput.value));
+    paintBadge(el.addBadge, badge, currentColor(null));
+  }
+
+  el.addBadge.addEventListener('click', () => openEditor(el.addBadge, null));
+
+  el.addInput.addEventListener('input', () => {
+    // Пока значок не выбран вручную, он подстраивается под название на ходу.
+    if (!draft.badge) renderDraftBadge();
+    if (editor && !editor.habit) renderEditor();
   });
-
-  window.addEventListener('resize', closePopover);
-
-  /* --- Управление --- */
 
   el.addForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const name = sanitizeName(el.addInput.value);
     if (!name) return;
-    state.habits.push(createHabit(name, state.habits.length));
+
+    state.habits.push(createHabit(name, state.habits.length, {
+      badge: draft.badge || autoBadge(name),
+      color: draft.color || undefined,
+      goal: draft.goal,
+    }));
+
     el.addInput.value = '';
+    draft = { badge: null, color: null, goal: DEFAULT_GOAL };
+    closeEditor();
     saveState();
     render();
   });
 
-  el.modeButtons.forEach((button) => {
-    button.addEventListener('click', () => setMode(button.dataset.mode));
+  /* --- Управление периодом --- */
+
+  el.modeButtons.forEach((item) => {
+    item.addEventListener('click', () => setMode(item.dataset.mode));
   });
 
   function setMode(mode) {
@@ -577,7 +900,7 @@
 
   function movePeriod(direction) {
     anchor = shiftPeriod(prefs.mode, anchor, direction);
-    closePopover();
+    closeEditor();
     render();
   }
 
@@ -605,7 +928,7 @@
   }
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closePopover(); return; }
+    if (e.key === 'Escape') { closeEditor(); return; }
     if (isTextField(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
 
     const key = e.key.toLowerCase();
@@ -615,6 +938,8 @@
     else if (key === 'w' || key === 'ц') setMode('week');
     else if (key === 'm' || key === 'ь') setMode('month');
   });
+
+  /* --- Экспорт и импорт --- */
 
   document.getElementById('export-btn').addEventListener('click', () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });

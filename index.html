@@ -46,6 +46,8 @@
       </div>
 
       <form class="add" id="add-form" autocomplete="off">
+        <button class="habit-badge add__badge" id="add-badge" type="button"
+                title="Значок, цвет и цель" aria-label="Настроить значок нового достижения"></button>
         <input class="add__input" id="add-input" type="text" maxlength="40"
                placeholder="Новое достижение — например, «Тренировка»">
         <button class="btn" type="submit">Добавить</button>
@@ -98,6 +100,14 @@
         <span class="hm-cell" data-level="4"></span>
         <span>Больше</span>
       </div>
+    </section>
+
+    <section class="panel" id="archive-panel" hidden>
+      <div class="panel__head">
+        <h2 class="panel__title">Архив</h2>
+        <span class="muted" id="archive-count"></span>
+      </div>
+      <div class="archive" id="archive-list"></div>
     </section>
   </main>
 
