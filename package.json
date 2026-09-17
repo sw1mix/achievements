@@ -1,0 +1,11 @@
+{
+  "name": "achievements",
+  "version": "1.0.0",
+  "description": "Трекер достижений: неделя, месяц, год и статистика. Без сборки и зависимостей.",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/",
+    "start": "python3 -m http.server 8000"
+  },
+  "license": "MIT"
+}
