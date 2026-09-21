@@ -4,7 +4,7 @@
   "description": "Трекер достижений: неделя, месяц, год и статистика. Без сборки и зависимостей.",
   "private": true,
   "scripts": {
-    "test": "node --test tests/",
+    "test": "node --test tests/*.test.js",
     "start": "python3 -m http.server 8000"
   },
   "license": "MIT"
